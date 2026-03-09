@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math';
 
 import 'package:mysql1/mysql1.dart';
@@ -13,7 +12,6 @@ import 'package:sumo_bracket_server/env_loader.dart';
 // simple server for bracket management
 
 late MySqlConnection _conn;
-final _log = Logger('server');
 
 Future<void> main(List<String> args) async {
   // configure logging
@@ -57,6 +55,8 @@ Future<void> main(List<String> args) async {
 
   final router = Router()
     ..get('/api/tournaments', _getTournaments)
+    ..put('/api/tournaments/<id>', _updateTournament)
+    ..delete('/api/tournaments/<id>', _deleteTournament)
     ..post('/api/brackets', _createBracket)
     ..get('/api/brackets/<id>', _getBracket)
     ..put('/api/brackets/<id>/match', _updateMatch);
@@ -67,6 +67,91 @@ Future<void> main(List<String> args) async {
 
   print('🚀 Listening on http://0.0.0.0:$serverPort');
   await io.serve(handler, '0.0.0.0', serverPort);
+}
+
+/// PUT /api/tournaments/:id
+/// body: { "name": "...", "status": "in_progress|completed|upcoming" }
+Future<Response> _updateTournament(Request req, String id) async {
+  Map<String, dynamic> body;
+  try {
+    body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+  } catch (e) {
+    return Response(
+      400,
+      body: jsonEncode({'error': 'Invalid JSON body'}),
+      headers: {'content-type': 'application/json'},
+    );
+  }
+
+  final name = body['name']?.toString();
+  final status = body['status']?.toString();
+
+  if ((name == null || name.trim().isEmpty) && status == null) {
+    return Response(
+      400,
+      body: jsonEncode({'error': 'Provide at least one of: name, status'}),
+      headers: {'content-type': 'application/json'},
+    );
+  }
+
+  if (status != null) {
+    const allowed = {'in_progress', 'completed', 'upcoming'};
+    if (!allowed.contains(status)) {
+      return Response(
+        400,
+        body: jsonEncode({'error': 'Invalid status: $status'}),
+        headers: {'content-type': 'application/json'},
+      );
+    }
+  }
+
+  final existing = await _conn.query(
+    'SELECT id, name, status, structure, created_at, updated_at FROM brackets WHERE id = ?',
+    [id],
+  );
+  if (existing.isEmpty) return Response.notFound('tournament not found');
+
+  final row = existing.first;
+  final nextName = (name != null && name.trim().isNotEmpty) ? name.trim() : row['name']?.toString();
+  final nextStatus = status ?? row['status']?.toString();
+
+  await _conn.query(
+    'UPDATE brackets SET name = ?, status = ? WHERE id = ?',
+    [nextName, nextStatus, id],
+  );
+
+  final updated = await _conn.query(
+    'SELECT id, name, status, structure, created_at, updated_at FROM brackets WHERE id = ?',
+    [id],
+  );
+  if (updated.isEmpty) return Response.notFound('tournament not found');
+
+  final updatedRow = updated.first;
+  final structure = jsonDecode(updatedRow['structure'].toString());
+  final tournament = {
+    'id': updatedRow['id'],
+    'name': updatedRow['name'],
+    'status': updatedRow['status'],
+    'type': structure['type'] ?? 'single',
+    'teams': (structure['teams'] as List?)?.length ?? 0,
+    'created': updatedRow['created_at'].toString(),
+    'updated': updatedRow['updated_at'].toString(),
+  };
+
+  return Response.ok(
+    jsonEncode(tournament),
+    headers: {'content-type': 'application/json'},
+  );
+}
+
+/// DELETE /api/tournaments/:id
+Future<Response> _deleteTournament(Request req, String id) async {
+  final result = await _conn.query('DELETE FROM brackets WHERE id = ?', [id]);
+  if (result.affectedRows == 0) return Response.notFound('tournament not found');
+  return Response.ok(
+    jsonEncode({'deleted': true, 'id': int.tryParse(id) ?? id}),
+    headers: {'content-type': 'application/json'},
+  );
 }
 
 Future<void> _ensureTables() async {
@@ -179,7 +264,7 @@ Future<Response> _createBracket(Request req) async {
       headers: {'content-type': 'application/json'});
 }
 
-/// GET /api/brackets/<id>
+/// GET /api/brackets/:id
 Future<Response> _getBracket(Request req, String id) async {
   final results =
       await _conn.query('SELECT structure FROM brackets WHERE id = ?', [id]);
@@ -192,7 +277,7 @@ Future<Response> _getBracket(Request req, String id) async {
       headers: {'content-type': 'application/json'});
 }
 
-/// PUT /api/brackets/<id>/match
+/// PUT /api/brackets/:id/match
 /// body: { "round": 0, "index": 1, "scoreA": 10, "scoreB": 8 }
 Future<Response> _updateMatch(Request req, String id) async {
   final payload = jsonDecode(await req.readAsString());
@@ -270,17 +355,18 @@ void _applyScore(Map<String, dynamic> struct, int round, int index,
   final rounds = struct['rounds'] as List;
   if (round < 0 || round >= rounds.length) return;
   final match = rounds[round][index] as Map<String, dynamic>;
+  // Yuhkoh scoring: first to 2 points wins the match.
+  // We always persist the current points so live scoring works.
   match['scoreA'] = scoreA;
   match['scoreB'] = scoreB;
-  String winner;
-  if (scoreA > scoreB) {
-    winner = match['teamA'];
-  } else if (scoreB > scoreA) {
-    winner = match['teamB'];
-  } else {
-    // tie not allowed
-    return;
-  }
+
+  // Only advance the bracket when a side has reached 2 points.
+  // (Allow intermediate states like 1-0 or 1-1 without advancing.)
+  if (scoreA == scoreB) return;
+  if (scoreA < 2 && scoreB < 2) return;
+  if (scoreA >= 2 && scoreB >= 2) return; // invalid
+
+  final String winner = scoreA >= 2 ? match['teamA'] : match['teamB'];
   if (round + 1 < rounds.length) {
     final nextIndex = index ~/ 2;
     final nextMatch = rounds[round + 1][nextIndex] as Map<String, dynamic>;

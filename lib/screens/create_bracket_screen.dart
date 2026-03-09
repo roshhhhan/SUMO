@@ -41,7 +41,9 @@ class _CreateBracketScreenState extends State<CreateBracketScreen> {
     setState(() => _testingConnection = true);
     print('Testing connection to server...');
     try {
-      final bracket = await ApiService().getBracket(1);
+      // Don't probe a specific bracket ID (it may not exist yet).
+      // Use tournaments list as a simple connectivity check.
+      await ApiService().getTournaments();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -78,8 +80,8 @@ class _CreateBracketScreenState extends State<CreateBracketScreen> {
                 const SizedBox(height: 16),
                 const Text(
                   'Make sure:\n'
-                  '• Server is running (dart run bin/server.dart)\n'
-                  '• MySQL database is running\n'
+                  '• API server is running (from /server: dart run bin/server.dart)\n'
+                  '• MySQL database is running (XAMPP)\n'
                   '• Network connection is available',
                   style: TextStyle(fontSize: 14),
                 ),

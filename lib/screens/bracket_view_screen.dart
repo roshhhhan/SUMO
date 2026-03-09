@@ -1,3 +1,5 @@
+import 'dart:developer' as developer;
+
 import 'package:flutter/material.dart';
 import '../models/bracket.dart';
 import '../services/api.dart';
@@ -13,263 +15,262 @@ class BracketViewScreen extends StatefulWidget {
 class _BracketViewScreenState extends State<BracketViewScreen> {
   late Bracket _bracket;
   bool _saving = false;
+  final Map<String, _ScoreDraft> _draftScores = {};
 
   @override
   void initState() {
     super.initState();
     _bracket = widget.bracket;
-    print('DEBUG: Bracket loaded');
-    print('  ID: ${_bracket.id}');
-    print('  Type: ${_bracket.type}');
-    print('  Teams: ${_bracket.teams}');
-    print('  Rounds: ${_bracket.rounds?.length ?? "null"}');
-    if (_bracket.rounds != null && _bracket.rounds!.isNotEmpty) {
-      print('  Round 0 matches: ${_bracket.rounds![0].length}');
-    }
+    developer.log(
+      'Bracket loaded',
+      name: 'BracketViewScreen',
+      error: {
+        'id': _bracket.id,
+        'type': _bracket.type,
+        'teams': _bracket.teams?.length,
+        'rounds': _bracket.rounds?.length,
+      },
+    );
   }
 
-  void _update(int round, int index, int scoreA, int scoreB) async {
+  static int _clampPoint(int v) => v.clamp(0, 2);
+
+  String _key(int round, int idx) => '$round:$idx';
+
+  _ScoreDraft _draftFor(int round, int idx, MatchInfo match) {
+    final k = _key(round, idx);
+    final existing = _draftScores[k];
+    if (existing != null) return existing;
+    final draft = _ScoreDraft(_clampPoint(match.scoreA ?? 0), _clampPoint(match.scoreB ?? 0));
+    _draftScores[k] = draft;
+    return draft;
+  }
+
+  Future<void> _update(int round, int index, int scoreA, int scoreB) async {
     if (_bracket.id == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Bracket ID not loaded')),
       );
       return;
     }
+
+    final sa = _clampPoint(scoreA);
+    final sb = _clampPoint(scoreB);
+    if (sa == 2 && sb == 2) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Invalid score: both sides cannot be 2')),
+      );
+      return;
+    }
+
+    final messenger = ScaffoldMessenger.of(context);
+
     setState(() => _saving = true);
     try {
-      final updated = await ApiService().updateMatch(
-          _bracket.id!, round, index, scoreA, scoreB);
+      final updated = await ApiService().updateMatch(_bracket.id!, round, index, sa, sb);
+      if (!mounted) return;
       setState(() {
         _bracket = updated;
+        _draftScores[_key(round, index)] = _ScoreDraft(sa, sb);
       });
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         const SnackBar(
           content: Row(
             children: [
               Icon(Icons.check_circle, color: Colors.white),
               SizedBox(width: 8),
-              Text('Score updated successfully!'),
+              Text('Yuhkoh score saved!'),
             ],
           ),
           backgroundColor: Colors.green,
         ),
       );
     } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.toString())));
+      messenger.showSnackBar(SnackBar(content: Text(e.toString())));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
   }
 
-  Widget _buildMatch(int round, int idx, MatchInfo match) {
-    final aController = TextEditingController(
-        text: match.scoreA != null ? match.scoreA.toString() : '');
-    final bController = TextEditingController(
-        text: match.scoreB != null ? match.scoreB.toString() : '');
+  Future<void> _resolveTie(int round, int idx, MatchInfo match) async {
+    final draft = _draftFor(round, idx, match);
+    if (draft.a == 2 || draft.b == 2) return;
+    if (draft.a != draft.b) return;
 
-    // Determine winner
-    String? winner;
-    Color? winnerColor;
-    if (match.scoreA != null && match.scoreB != null) {
-      if (match.scoreA! > match.scoreB!) {
-        winner = match.teamA;
-        winnerColor = Colors.green.shade100;
-      } else if (match.scoreB! > match.scoreA!) {
-        winner = match.teamB;
-        winnerColor = Colors.green.shade100;
-      }
-    }
+    final aName = match.teamA ?? 'Team A';
+    final bName = match.teamB ?? 'Team B';
 
-    return Card(
-      elevation: 3,
-      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Container(
-        width: 280,
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          color: winnerColor,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Match header
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.primaryContainer,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    'Match ${idx + 1}',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: Theme.of(context).colorScheme.onPrimaryContainer,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-                if (winner != null) ...[
-                  const SizedBox(width: 8),
-                  Icon(
-                    Icons.emoji_events,
-                    size: 16,
-                    color: Colors.amber,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    'Winner: $winner',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.green,
-                    ),
-                  ),
-                ],
-              ],
+    final winner = await showDialog<_TieWinner>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Resolve tie'),
+          content: const Text('Pick the winner for this match. This will award 2 Yuhkoh points to the winner.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
             ),
-            const SizedBox(height: 12),
-
-            // Team A
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.blue.shade50,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.blue.shade200),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      match.teamA ?? 'TBD',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w500,
-                        fontSize: 16,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  SizedBox(
-                    width: 60,
-                    child: TextField(
-                      controller: aController,
-                      keyboardType: TextInputType.number,
-                      textAlign: TextAlign.center,
-                      decoration: InputDecoration(
-                        hintText: '0',
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        filled: true,
-                        fillColor: Colors.white,
-                      ),
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ],
-              ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, _TieWinner.a),
+              child: Text(aName),
             ),
-            const SizedBox(height: 8),
-
-            // VS indicator
-            Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primary,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Text(
-                  'VS',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-
-            // Team B
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.red.shade50,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.red.shade200),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      match.teamB ?? 'TBD',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w500,
-                        fontSize: 16,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  SizedBox(
-                    width: 60,
-                    child: TextField(
-                      controller: bController,
-                      keyboardType: TextInputType.number,
-                      textAlign: TextAlign.center,
-                      decoration: InputDecoration(
-                        hintText: '0',
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        filled: true,
-                        fillColor: Colors.white,
-                      ),
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            // Save button
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _saving
-                    ? null
-                    : () {
-                        final sa = int.tryParse(aController.text) ?? 0;
-                        final sb = int.tryParse(bController.text) ?? 0;
-                        _update(round, idx, sa, sb);
-                      },
-                icon: _saving
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.save, size: 16),
-                label: Text(_saving ? 'Saving...' : 'Update Score'),
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-              ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, _TieWinner.b),
+              child: Text(bName),
             ),
           ],
+        );
+      },
+    );
+
+    if (winner == null) return;
+    if (winner == _TieWinner.a) {
+      setState(() => _draftScores[_key(round, idx)] = _ScoreDraft(2, 0));
+      await _update(round, idx, 2, 0);
+    } else {
+      setState(() => _draftScores[_key(round, idx)] = _ScoreDraft(0, 2));
+      await _update(round, idx, 0, 2);
+    }
+  }
+
+  Widget _buildMatch(int round, int idx, MatchInfo match) {
+    final scheme = Theme.of(context).colorScheme;
+    final draft = _draftFor(round, idx, match);
+    final aName = match.teamA ?? 'TBD';
+    final bName = match.teamB ?? 'TBD';
+    final decided = draft.a == 2 || draft.b == 2;
+    final hasTie = (draft.a == draft.b) && !decided;
+
+    final String? winner = decided
+        ? (draft.a == 2 ? match.teamA : match.teamB)
+        : null;
+
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: SizedBox(
+        width: 300,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: scheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      'Match ${idx + 1}',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: scheme.onPrimaryContainer,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    'First to 2 Yuhkoh (best-of-3)',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                  ),
+                ],
+              ),
+              if (winner != null) ...[
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    const Icon(Icons.emoji_events, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Winner: $winner',
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w800,
+                            ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 14),
+
+              _TeamYuhkohRow(
+                name: aName,
+                points: draft.a,
+                disabled: _saving,
+                onDecrement: () {
+                  setState(() => draft.a = _clampPoint(draft.a - 1));
+                },
+                onIncrement: decided
+                    ? null
+                    : () {
+                        setState(() => draft.a = _clampPoint(draft.a + 1));
+                      },
+              ),
+              const SizedBox(height: 10),
+              Center(
+                child: Text(
+                  'VS',
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.8,
+                      ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              _TeamYuhkohRow(
+                name: bName,
+                points: draft.b,
+                disabled: _saving,
+                onDecrement: () {
+                  setState(() => draft.b = _clampPoint(draft.b - 1));
+                },
+                onIncrement: decided
+                    ? null
+                    : () {
+                        setState(() => draft.b = _clampPoint(draft.b + 1));
+                      },
+              ),
+              const SizedBox(height: 14),
+
+              Row(
+                children: [
+                  if (hasTie)
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _saving ? null : () => _resolveTie(round, idx, match),
+                        icon: const Icon(Icons.gavel),
+                        label: const Text('Resolve tie'),
+                      ),
+                    ),
+                  if (hasTie) const SizedBox(width: 10),
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: _saving ? null : () => _update(round, idx, draft.a, draft.b),
+                      icon: _saving
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.save, size: 18),
+                      label: Text(_saving ? 'Saving...' : 'Save'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -319,8 +320,6 @@ class _BracketViewScreenState extends State<BracketViewScreen> {
       appBar: AppBar(
         title: Text('Tournament #${_bracket.id}'),
         elevation: 0,
-        backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-        foregroundColor: Theme.of(context).colorScheme.onPrimaryContainer,
         actions: [
           IconButton(
             onPressed: () => Navigator.pop(context),
@@ -335,7 +334,7 @@ class _BracketViewScreenState extends State<BracketViewScreen> {
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: [
-              Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3),
+              Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.25),
               Theme.of(context).colorScheme.surface,
             ],
           ),
@@ -436,7 +435,7 @@ class _BracketViewScreenState extends State<BracketViewScreen> {
                                     Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                       decoration: BoxDecoration(
-                                        color: Theme.of(context).colorScheme.onPrimary.withOpacity(0.2),
+                                        color: Theme.of(context).colorScheme.onPrimary.withValues(alpha: 0.18),
                                         borderRadius: BorderRadius.circular(12),
                                       ),
                                       child: Text(
@@ -467,6 +466,81 @@ class _BracketViewScreenState extends State<BracketViewScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _ScoreDraft {
+  int a;
+  int b;
+  _ScoreDraft(this.a, this.b);
+}
+
+enum _TieWinner { a, b }
+
+class _TeamYuhkohRow extends StatelessWidget {
+  final String name;
+  final int points;
+  final bool disabled;
+  final VoidCallback onDecrement;
+  final VoidCallback? onIncrement;
+
+  const _TeamYuhkohRow({
+    required this.name,
+    required this.points,
+    required this.disabled,
+    required this.onDecrement,
+    required this.onIncrement,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          IconButton.filledTonal(
+            onPressed: disabled ? null : onDecrement,
+            icon: const Icon(Icons.remove),
+            tooltip: 'Decrease',
+          ),
+          const SizedBox(width: 8),
+          Container(
+            width: 44,
+            alignment: Alignment.center,
+            child: Text(
+              '$points',
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.w900,
+                  ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton.filled(
+            onPressed: (disabled || onIncrement == null || points >= 2) ? null : onIncrement,
+            icon: const Icon(Icons.add),
+            tooltip: 'Add Yuhkoh',
+          ),
+        ],
       ),
     );
   }

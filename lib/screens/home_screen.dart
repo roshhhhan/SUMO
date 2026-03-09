@@ -1,229 +1,408 @@
 import 'package:flutter/material.dart';
+import '../services/api.dart';
+import 'bracket_view_screen.dart';
 import 'create_bracket_screen.dart';
 import 'tournament_list_screen.dart';
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
   @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  bool _loading = true;
+  String? _error;
+  List<Map<String, dynamic>> _recent = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRecent();
+  }
+
+  Future<void> _loadRecent() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final tournaments = await ApiService().getTournaments();
+      final formatted = tournaments.map((t) {
+        return {
+          'id': t['id'],
+          'name': t['name'],
+          'teams': t['teams'] ?? 0,
+          'type': t['type'] ?? 'single',
+          'status': t['status'] ?? 'in_progress',
+          'created': DateTime.tryParse((t['created'] ?? '').toString()),
+        };
+      }).toList();
+
+      setState(() {
+        _recent = formatted.take(5).toList();
+        _loading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Color(0xFF1E3A8A),
-              Color(0xFF3B82F6),
-              Color(0xFF60A5FA),
-            ],
-          ),
-        ),
-        child: SafeArea(
-          child: SingleChildScrollView(
-            child: Padding(
-              padding: const EdgeInsets.all(24.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  const SizedBox(height: 20),
-                  // Logo/Icon
-                  Container(
-                    width: 120,
-                    height: 120,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.2),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.sports_martial_arts,
-                      size: 60,
-                      color: Colors.white,
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  // Title
-                  const Text(
-                    'Sumo Tournament',
-                    style: TextStyle(
-                      fontSize: 32,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
-                  ),
-                  const Text(
-                    'Manager',
-                    style: TextStyle(
-                      fontSize: 32,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  // Subtitle
-                  const Text(
-                    'Create and manage robot sumo wrestling tournaments',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: Colors.white70,
-                    ),
-                  ),
-                  const SizedBox(height: 40),
-                  // Feature cards
-                  _buildFeatureCard(
-                    icon: Icons.add_circle_outline,
-                    title: 'Create Tournament',
-                    description: 'Set up a new bracket with custom teams',
-                  ),
-                  const SizedBox(height: 16),
-                  _buildFeatureCard(
-                    icon: Icons.leaderboard,
-                    title: 'Live Scoring',
-                    description: 'Track matches and update scores in real-time',
-                  ),
-                  const SizedBox(height: 16),
-                  _buildFeatureCard(
-                    icon: Icons.emoji_events,
-                    title: 'Bracket Visualization',
-                    description: 'View tournament progress with clear bracket layout',
-                  ),
-                  const SizedBox(height: 40),
-                  // Get Started Button
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const CreateBracketScreen(),
-                          ),
-                        );
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white,
-                        foregroundColor: const Color(0xFF1E3A8A),
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+      body: SafeArea(
+        child: RefreshIndicator(
+          onRefresh: _loadRecent,
+          child: CustomScrollView(
+            slivers: [
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: scheme.primaryContainer,
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Icon(
+                          Icons.sports_martial_arts,
+                          color: scheme.onPrimaryContainer,
                         ),
                       ),
-                      child: const Text(
-                        'Get Started',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Sumo Tournament Manager',
+                              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 0.2,
+                                  ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Create brackets, score matches, and track winners.',
+                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                            ),
+                          ],
                         ),
                       ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  // View Tournaments Button
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton(
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const TournamentListScreen(),
-                          ),
-                        );
-                      },
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: Colors.white, width: 2),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
+                      IconButton(
+                        onPressed: _loadRecent,
+                        tooltip: 'Refresh',
+                        icon: const Icon(Icons.refresh),
                       ),
-                      child: const Text(
-                        'View Tournaments',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
+                    ],
                   ),
-                  const SizedBox(height: 20),
-                  // Footer
-                  const Text(
-                    'Built with Flutter & Dart',
-                    style: TextStyle(
-                      color: Colors.white60,
-                      fontSize: 12,
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                ],
+                ),
               ),
-            ),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 10, 20, 12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (_) => const CreateBracketScreen()),
+                            );
+                          },
+                          icon: const Icon(Icons.add),
+                          label: const Text('New Tournament'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => const TournamentListScreen()),
+                          );
+                        },
+                        icon: const Icon(Icons.list_alt),
+                        label: const Text('All'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 10),
+                  child: _DashboardSectionHeader(
+                    title: 'Recent tournaments',
+                    trailing: TextButton(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const TournamentListScreen()),
+                        );
+                      },
+                      child: const Text('See all'),
+                    ),
+                  ),
+                ),
+              ),
+              if (_loading)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                )
+              else if (_error != null)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                    child: Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Could not load tournaments',
+                              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              _error!,
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                            ),
+                            const SizedBox(height: 12),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: FilledButton(
+                                onPressed: _loadRecent,
+                                child: const Text('Try again'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                )
+              else if (_recent.isEmpty)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                    child: Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(18),
+                        child: Row(
+                          children: [
+                            Icon(Icons.emoji_events_outlined, color: scheme.primary),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                'No tournaments yet. Create one to get started.',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                )
+              else
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                  sliver: SliverList.separated(
+                    itemBuilder: (context, index) {
+                      final t = _recent[index];
+                      return _TournamentTile(
+                        name: (t['name'] ?? 'Unnamed').toString(),
+                        status: (t['status'] ?? 'in_progress').toString(),
+                        teams: (t['teams'] as int?) ?? 0,
+                        type: (t['type'] ?? 'single').toString(),
+                        onTap: () async {
+                          final navigator = Navigator.of(context);
+                          final messenger = ScaffoldMessenger.of(context);
+                          try {
+                            final bracket = await ApiService().getBracket(t['id'] as int);
+                            if (!mounted) return;
+                            navigator.push(
+                              MaterialPageRoute(
+                                builder: (_) => BracketViewScreen(bracket: bracket),
+                              ),
+                            );
+                          } catch (e) {
+                            if (!mounted) return;
+                            messenger.showSnackBar(
+                              SnackBar(content: Text('Failed to open tournament: $e')),
+                            );
+                          }
+                        },
+                      );
+                    },
+                    separatorBuilder: (_, _) => const SizedBox(height: 10),
+                    itemCount: _recent.length,
+                  ),
+                ),
+            ],
           ),
         ),
       ),
     );
   }
+}
 
-  Widget _buildFeatureCard({
-    required IconData icon,
-    required String title,
-    required String description,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: Colors.white.withOpacity(0.2),
-          width: 1,
+class _DashboardSectionHeader extends StatelessWidget {
+  final String title;
+  final Widget? trailing;
+  const _DashboardSectionHeader({required this.title, this.trailing});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            title,
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
+          ),
         ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(
-              icon,
-              color: Colors.white,
-              size: 20,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                  ),
+        ?trailing,
+      ],
+    );
+  }
+}
+
+class _TournamentTile extends StatelessWidget {
+  final String name;
+  final String status;
+  final int teams;
+  final String type;
+  final VoidCallback onTap;
+
+  const _TournamentTile({
+    required this.name,
+    required this.status,
+    required this.teams,
+    required this.type,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final (statusLabel, statusIcon) = switch (status) {
+      'completed' => ('Completed', Icons.check_circle),
+      'upcoming' => ('Upcoming', Icons.schedule),
+      _ => ('In Progress', Icons.play_circle),
+    };
+
+    final typeLabel = type == 'double' ? 'Double Elim' : 'Single Elim';
+
+    return Card(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: scheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  description,
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(0.8),
-                    fontSize: 12,
-                  ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+                child: Icon(
+                  Icons.emoji_events,
+                  color: scheme.onPrimaryContainer,
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w800,
+                          ),
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Icon(Icons.group, size: 16, color: scheme.onSurfaceVariant),
+                        const SizedBox(width: 4),
+                        Text(
+                          '$teams teams',
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: scheme.onSurfaceVariant,
+                              ),
+                        ),
+                        const SizedBox(width: 12),
+                        Icon(Icons.call_split, size: 16, color: scheme.onSurfaceVariant),
+                        const SizedBox(width: 4),
+                        Text(
+                          typeLabel,
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: scheme.onSurfaceVariant,
+                              ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: scheme.outlineVariant),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(statusIcon, size: 16, color: scheme.primary),
+                    const SizedBox(width: 6),
+                    Text(
+                      statusLabel,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

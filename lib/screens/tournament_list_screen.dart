@@ -22,7 +22,10 @@ class _TournamentListScreenState extends State<TournamentListScreen> {
   }
 
   Future<void> _loadTournaments() async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final tournaments = await ApiService().getTournaments();
       
@@ -47,6 +50,140 @@ class _TournamentListScreenState extends State<TournamentListScreen> {
         _error = e.toString();
         _loading = false;
       });
+    }
+  }
+
+  Future<void> _editTournament(Map<String, dynamic> tournament) async {
+    final nameController = TextEditingController(text: tournament['name']?.toString() ?? '');
+    var status = (tournament['status']?.toString() ?? 'in_progress');
+
+    final messenger = ScaffoldMessenger.of(context);
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setLocalState) {
+            return AlertDialog(
+              title: const Text('Edit tournament'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: nameController,
+                    decoration: const InputDecoration(
+                      labelText: 'Tournament name',
+                      prefixIcon: Icon(Icons.event),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    initialValue: status,
+                    items: const [
+                      DropdownMenuItem(value: 'in_progress', child: Text('In Progress')),
+                      DropdownMenuItem(value: 'upcoming', child: Text('Upcoming')),
+                      DropdownMenuItem(value: 'completed', child: Text('Completed')),
+                    ],
+                    onChanged: (v) {
+                      if (v == null) return;
+                      setLocalState(() => status = v);
+                    },
+                    decoration: const InputDecoration(
+                      labelText: 'Status',
+                      prefixIcon: Icon(Icons.flag),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (saved != true) return;
+
+    final nextName = nameController.text.trim();
+    if (nextName.isEmpty) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Tournament name cannot be empty')),
+      );
+      return;
+    }
+
+    try {
+      await ApiService().updateTournament(
+        tournament['id'] as int,
+        name: nextName,
+        status: status,
+      );
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Tournament updated')),
+      );
+      await _loadTournaments();
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Failed to update: $e')),
+      );
+    }
+  }
+
+  Future<void> _deleteTournament(Map<String, dynamic> tournament) async {
+    final messenger = ScaffoldMessenger.of(context);
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Delete tournament?'),
+          content: Text(
+            'This will permanently delete "${tournament['name']}".',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.error,
+                foregroundColor: Theme.of(context).colorScheme.onError,
+              ),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirm != true) return;
+
+    try {
+      await ApiService().deleteTournament(tournament['id'] as int);
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Tournament deleted')),
+      );
+      await _loadTournaments();
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Failed to delete: $e')),
+      );
     }
   }
 
@@ -159,24 +296,24 @@ class _TournamentListScreenState extends State<TournamentListScreen> {
                             margin: const EdgeInsets.only(bottom: 12),
                             child: InkWell(
                               onTap: () async {
+                                final navigator = Navigator.of(context);
+                                final messenger = ScaffoldMessenger.of(context);
+
                                 // For demo purposes, try to load the tournament
                                 // In real app, you'd navigate to the bracket view
                                 try {
                                   final bracket = await ApiService().getBracket(tournament['id']);
-                                  if (mounted) {
-                                    Navigator.push(
-                                      context,
+                                  if (!mounted) return;
+                                  navigator.push(
                                       MaterialPageRoute(
                                         builder: (_) => BracketViewScreen(bracket: bracket),
                                       ),
                                     );
-                                  }
                                 } catch (e) {
-                                  if (mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text('Tournament not found: $e')),
-                                    );
-                                  }
+                                  if (!mounted) return;
+                                  messenger.showSnackBar(
+                                    SnackBar(content: Text('Tournament not found: $e')),
+                                  );
                                 }
                               },
                               borderRadius: BorderRadius.circular(12),
@@ -196,6 +333,39 @@ class _TournamentListScreenState extends State<TournamentListScreen> {
                                           ),
                                         ),
                                         _buildStatusBadge(tournament['status']),
+                                        const SizedBox(width: 8),
+                                        PopupMenuButton<String>(
+                                          tooltip: 'Tournament actions',
+                                          onSelected: (value) async {
+                                            if (value == 'edit') {
+                                              await _editTournament(tournament);
+                                            } else if (value == 'delete') {
+                                              await _deleteTournament(tournament);
+                                            }
+                                          },
+                                          itemBuilder: (context) => const [
+                                            PopupMenuItem(
+                                              value: 'edit',
+                                              child: Row(
+                                                children: [
+                                                  Icon(Icons.edit),
+                                                  SizedBox(width: 8),
+                                                  Text('Edit'),
+                                                ],
+                                              ),
+                                            ),
+                                            PopupMenuItem(
+                                              value: 'delete',
+                                              child: Row(
+                                                children: [
+                                                  Icon(Icons.delete_outline),
+                                                  SizedBox(width: 8),
+                                                  Text('Delete'),
+                                                ],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
                                       ],
                                     ),
                                     const SizedBox(height: 8),

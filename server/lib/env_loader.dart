@@ -39,7 +39,7 @@ Map<String, String> loadEnv({String? filePath}) {
 /// Get a value from .env first, then system environment
 String getEnv(String key, {String defaultValue = ''}) {
   final envVars = loadEnv();
-  final value = envVars[key] ?? Platform.environment[key] ?? defaultValue;
+  final value = Platform.environment[key] ?? envVars[key] ?? defaultValue;
   print('  $key=${value.isEmpty ? '(empty)' : value}');
   return value;
 }
