@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/api.dart';
-import 'bracket_view_screen.dart';
+import 'team_registration_screen.dart';
 import 'create_bracket_screen.dart';
 import 'tournament_list_screen.dart';
 
@@ -15,12 +15,16 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _loading = true;
   String? _error;
   List<Map<String, dynamic>> _recent = [];
+  // Registered teams managed from the home screen
+  List<Map<String, dynamic>> _registeredTeams = [];
 
   @override
   void initState() {
     super.initState();
     _loadRecent();
   }
+
+  // Manage Teams was replaced by full screen ManageTeamsScreen
 
   Future<void> _loadRecent() async {
     setState(() {
@@ -122,12 +126,25 @@ class _HomeScreenState extends State<HomeScreen> {
                           onPressed: () {
                             Navigator.push(
                               context,
-                              MaterialPageRoute(builder: (_) => const CreateBracketScreen()),
+                              MaterialPageRoute(builder: (_) => CreateBracketScreen(initialTeams: _registeredTeams.isNotEmpty ? _registeredTeams : null)),
                             );
                           },
                           icon: const Icon(Icons.add),
                           label: const Text('New Tournament'),
                         ),
+                      ),
+                      const SizedBox(width: 12),
+                      // Team registration button (opens full screen registration)
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          final result = await Navigator.push<List<Map<String, dynamic>>?>(
+                            context,
+                            MaterialPageRoute(builder: (_) => TeamRegistrationScreen(initialTeams: _registeredTeams)),
+                          );
+                          if (result != null) setState(() => _registeredTeams = result);
+                        },
+                        icon: const Icon(Icons.how_to_reg),
+                        label: const Text('Register'),
                       ),
                       const SizedBox(width: 12),
                       OutlinedButton.icon(
@@ -245,10 +262,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           try {
                             final bracket = await ApiService().getBracket(t['id'] as int);
                             if (!mounted) return;
-                            navigator.push(
-                              MaterialPageRoute(
-                                builder: (_) => BracketViewScreen(bracket: bracket),
-                              ),
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (_) => CreateBracketScreen(initialTeams: _registeredTeams.isNotEmpty ? _registeredTeams : null)),
                             );
                           } catch (e) {
                             if (!mounted) return;

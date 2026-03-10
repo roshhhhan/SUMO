@@ -59,14 +59,43 @@ Future<void> main(List<String> args) async {
     ..delete('/api/tournaments/<id>', _deleteTournament)
     ..post('/api/brackets', _createBracket)
     ..get('/api/brackets/<id>', _getBracket)
-    ..put('/api/brackets/<id>/match', _updateMatch);
+    ..put('/api/brackets/<id>/match', _updateMatch)
+    ..post('/api/teams', _createTeam)
+    ..get('/api/teams', _getTeams);
+
+    // Debug helper: create a sample team (useful during development)
+    router
+      .get('/api/debug/addSampleTeam', _addSampleTeam);
 
   final handler = const Pipeline()
+      .addMiddleware(_corsMiddleware())
       .addMiddleware(logRequests())
       .addHandler(router.call);
 
   print('🚀 Listening on http://0.0.0.0:$serverPort');
   await io.serve(handler, '0.0.0.0', serverPort);
+}
+
+/// Simple CORS middleware to allow browser requests during development.
+Middleware _corsMiddleware() {
+  return (Handler innerHandler) {
+    return (Request request) async {
+      // Preflight
+      if (request.method == 'OPTIONS') {
+        return Response.ok('', headers: {
+          'access-control-allow-origin': '*',
+          'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
+          'access-control-allow-headers': 'Origin, Content-Type, Accept',
+        });
+      }
+
+      final resp = await innerHandler(request);
+      return resp.change(headers: {
+        ...resp.headers,
+        'access-control-allow-origin': '*',
+      });
+    };
+  };
 }
 
 /// PUT /api/tournaments/:id
@@ -215,26 +244,39 @@ Future<void> _ensureTables() async {
 /// GET /api/tournaments
 /// Returns list of all tournaments
 Future<Response> _getTournaments(Request req) async {
-  final results = await _conn.query('''
-    SELECT id, name, structure, status, created_at, updated_at FROM brackets 
-    ORDER BY created_at DESC
-  ''');
+  // Try to fetch tournaments, but never throw a 500 to the client.
+  // Instead log any errors and return an empty list so the app can continue.
+  try {
+    final results = await _conn.query('''
+      SELECT id, name, structure, status, created_at, updated_at FROM brackets 
+      ORDER BY created_at DESC
+    ''');
 
-  final tournaments = results.map((row) {
-    final structure = jsonDecode(row['structure'].toString());
-    return {
-      'id': row['id'],
-      'name': row['name'],
-      'status': row['status'],
-      'type': structure['type'] ?? 'single',
-      'teams': (structure['teams'] as List?)?.length ?? 0,
-      'created': row['created_at'].toString(),
-      'updated': row['updated_at'].toString(),
-    };
-  }).toList();
+    final List<Map<String, dynamic>> tournaments = [];
+    for (final row in results) {
+      try {
+        final structure = jsonDecode(row['structure'].toString());
+        tournaments.add({
+          'id': row['id'],
+          'name': row['name'],
+          'status': row['status'],
+          'type': structure['type'] ?? 'single',
+          'teams': (structure['teams'] as List?)?.length ?? 0,
+          'created': row['created_at'].toString(),
+          'updated': row['updated_at'].toString(),
+        });
+      } catch (e) {
+        // Log bad rows for manual inspection and continue.
+        print('Bracket ID ${row['id']} has invalid structure JSON: ${row['structure']}');
+      }
+    }
 
-  return Response.ok(jsonEncode(tournaments),
-      headers: {'content-type': 'application/json'});
+    return Response.ok(jsonEncode(tournaments), headers: {'content-type': 'application/json'});
+  } catch (e) {
+    // Log the error and return an empty list instead of 500 to keep the app usable.
+    print('ERROR in _getTournaments: $e');
+    return Response.ok(jsonEncode([]), headers: {'content-type': 'application/json'});
+  }
 }
 
 /// POST /api/brackets
@@ -244,7 +286,7 @@ Future<Response> _createBracket(Request req) async {
   final String name = body['name'] ?? 'Unnamed';
   final List<dynamic> teamsDyn = body['teams'] ?? [];
   final String type = body['type'] ?? 'single';
-  final List<String> teams = teamsDyn.map((e) => e.toString()).toList();
+  final List<Map<String, dynamic>> teams = teamsDyn.map((e) => Map<String, dynamic>.from(e as Map)).toList();
 
   if (teams.length < 2 || (teams.length & (teams.length - 1)) != 0) {
     // require power of two
@@ -299,7 +341,7 @@ Future<Response> _updateMatch(Request req, String id) async {
       headers: {'content-type': 'application/json'});
 }
 
-Map<String, dynamic> _generateBracket(List<String> teams, String type) {
+Map<String, dynamic> _generateBracket(List<Map<String, dynamic>> teams, String type) {
   final n = teams.length;
   final rounds = (log(n) / log(2)).ceil();
   List<List<Map<String, dynamic>>> roundsList = [];
@@ -375,5 +417,65 @@ void _applyScore(Map<String, dynamic> struct, int round, int index,
     } else {
       nextMatch['teamB'] = winner;
     }
+  }
+}
+
+/// POST /api/teams
+/// body: { "name": "Team Name", "school": "School Name", "members": ["Member1", "Member2"] }
+Future<Response> _createTeam(Request req) async {
+  final body = jsonDecode(await req.readAsString());
+  final String name = body['name'] ?? '';
+  final String school = body['school'] ?? '';
+  final List<dynamic> membersDyn = body['members'] ?? [];
+  final List<String> members = membersDyn.map((e) => e.toString()).toList();
+
+  if (name.trim().isEmpty) {
+    return Response(400,
+        body: jsonEncode({'error': 'Team name is required'}),
+        headers: {'content-type': 'application/json'});
+  }
+
+  final result = await _conn.query(
+      'INSERT INTO teams (name, school, members) VALUES (?, ?, ?)',
+      [name, school, jsonEncode(members)]);
+  final id = result.insertId;
+
+  return Response(201,
+      body: jsonEncode({'id': id, 'name': name, 'school': school, 'members': members}),
+      headers: {'content-type': 'application/json'});
+}
+
+/// GET /api/teams
+Future<Response> _getTeams(Request req) async {
+  final results = await _conn.query('SELECT id, name, school, members, created_at FROM teams ORDER BY created_at DESC');
+  final teams = results.map((row) {
+    return {
+      'id': row['id'],
+      'name': row['name'],
+      'school': row['school'],
+      'members': jsonDecode(row['members'].toString()),
+      'created_at': row['created_at'].toString(),
+    };
+  }).toList();
+  return Response.ok(jsonEncode(teams), headers: {'content-type': 'application/json'});
+}
+
+/// Debug: GET /api/debug/addSampleTeam
+Future<Response> _addSampleTeam(Request req) async {
+  try {
+    final name = 'Sample Team';
+    final school = 'Debug School';
+    final members = ['Alice', 'Bob'];
+    final result = await _conn.query(
+      'INSERT INTO teams (name, school, members) VALUES (?, ?, ?)',
+      [name, school, jsonEncode(members)],
+    );
+    final id = result.insertId;
+    return Response(201,
+        body: jsonEncode({'id': id, 'name': name, 'school': school, 'members': members}),
+        headers: {'content-type': 'application/json'});
+  } catch (e) {
+    print('ERROR in _addSampleTeam: $e');
+    return Response.internalServerError(body: jsonEncode({'error': e.toString()}), headers: {'content-type': 'application/json'});
   }
 }

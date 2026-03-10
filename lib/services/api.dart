@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as developer;
-import 'dart:io' show Platform;
+// Conditional import: use dart:io only on platforms that support it.
+import '../src/platform_stub.dart'
+  if (dart.library.io) '../src/platform_io.dart';
 
 import 'package:http/http.dart' as http;
 import '../models/bracket.dart';
@@ -9,11 +11,11 @@ import '../models/bracket.dart';
 class ApiService {
   static const _timeout = Duration(seconds: 30);
 
-  // Use localhost for desktop, 10.0.2.2 for Android emulator.
-  // Try both ports so the app still works if 8080 is occupied
+  // Use localhost for desktop/web, 10.0.2.2 for Android emulator.
+  // Try multiple ports so the app still works if 8080 is occupied
   // or running an older server without CRUD routes.
   static List<String> get _baseUrls {
-    final host = Platform.isAndroid ? '10.0.2.2' : 'localhost';
+    final host = getHost();
     return [
       'http://$host:8080/api',
       'http://$host:8081/api',
@@ -186,7 +188,7 @@ class ApiService {
   }
 
   Future<Bracket> createBracket(
-      String name, List<String> teams, String type) async {
+      String name, List<Map<String, dynamic>> teams, String type) async {
     try {
       developer.log('Creating bracket: $name with ${teams.length} teams');
       final resp = await _post(
@@ -194,10 +196,8 @@ class ApiService {
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'name': name, 'teams': teams, 'type': type}),
       );
-      
       developer.log('Response status: ${resp.statusCode}');
       developer.log('Response body: ${resp.body}');
-      
       if (resp.statusCode == 201) {
         final body = jsonDecode(resp.body);
         return Bracket.fromJson(body);
@@ -237,6 +237,46 @@ class ApiService {
       return Bracket.fromJson(body);
     } else {
       throw Exception('Failed to update: ${resp.body}');
+    }
+  }
+
+  Future<Map<String, dynamic>> registerTeam(String name, String school, List<String> members) async {
+    try {
+      developer.log('Registering team: $name');
+      final resp = await _post(
+        '/teams',
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'name': name, 'school': school, 'members': members}),
+      );
+      developer.log('Response status: ${resp.statusCode}');
+      developer.log('Response body: ${resp.body}');
+      if (resp.statusCode == 201) {
+        final body = jsonDecode(resp.body) as Map<String, dynamic>;
+        return Map<String, dynamic>.from(body);
+      } else {
+        throw Exception('Failed to register team: ${resp.body}');
+      }
+    } catch (e) {
+      developer.log('ERROR: $e');
+      rethrow;
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getTeams() async {
+    try {
+      developer.log('Fetching teams...');
+      final resp = await _get('/teams');
+      developer.log('Response status: ${resp.statusCode}');
+      developer.log('Response body: ${resp.body}');
+      if (resp.statusCode == 200) {
+        final List<dynamic> body = jsonDecode(resp.body);
+        return body.map((item) => Map<String, dynamic>.from(item as Map)).toList();
+      } else {
+        throw Exception('Failed to fetch teams: ${resp.body}');
+      }
+    } catch (e) {
+      developer.log('ERROR: $e');
+      rethrow;
     }
   }
 }

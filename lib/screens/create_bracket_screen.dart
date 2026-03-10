@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'dart:developer' as developer;
 import '../services/api.dart';
 import 'bracket_view_screen.dart';
 
 class CreateBracketScreen extends StatefulWidget {
-  const CreateBracketScreen({super.key});
+  final List<Map<String, dynamic>>? initialTeams;
+  const CreateBracketScreen({super.key, this.initialTeams});
 
   @override
   State<CreateBracketScreen> createState() => _CreateBracketScreenState();
@@ -14,25 +16,59 @@ class _CreateBracketScreenState extends State<CreateBracketScreen> {
   String _name = '';
   String _type = 'single';
   int _teamCount = 4; // Default to 4 teams
-  List<TextEditingController> _teamControllers = [];
+  List<Map<String, TextEditingController>> _teamControllers = [];
+  List<Map<String, dynamic>> _registeredTeams = [];
+  List<dynamic> _selectedTeamIds = [];
   bool _creating = false;
   bool _testingConnection = false;
 
   @override
   void initState() {
     super.initState();
-    _buildControllers();
+    if (widget.initialTeams != null && [2, 4, 8, 16].contains(widget.initialTeams!.length)) {
+      _teamCount = widget.initialTeams!.length;
+      _teamControllers = widget.initialTeams!
+          .map((team) => {
+                'name': TextEditingController(text: team['name'] ?? ''),
+                'school': TextEditingController(text: team['school'] ?? ''),
+                'members': TextEditingController(text: (team['members'] is List && team['members'].isNotEmpty) ? (team['members'] as List).join(', ') : ''),
+              })
+          .toList();
+    } else {
+      _buildControllers();
+    }
+    _loadRegisteredTeams();
   }
 
   void _buildControllers() {
-    _teamControllers =
-        List.generate(_teamCount, (_) => TextEditingController());
+    _teamControllers = List.generate(_teamCount, (_) => {
+      'name': TextEditingController(),
+      'school': TextEditingController(),
+      'members': TextEditingController(),
+    });
+    _selectedTeamIds = List<dynamic>.filled(_teamCount, null);
+  }
+
+  void _loadRegisteredTeams() async {
+    try {
+      final list = await ApiService().getTeams();
+      setState(() {
+        _registeredTeams = list;
+        // ensure selected ids array matches current team count
+        _selectedTeamIds = List<dynamic>.filled(_teamCount, null);
+      });
+    } catch (e) {
+      // ignore load errors; user can still create custom teams
+      print('Failed to load registered teams: $e');
+    }
   }
 
   @override
   void dispose() {
-    for (var c in _teamControllers) {
-      c.dispose();
+    for (var team in _teamControllers) {
+      team['name']?.dispose();
+      team['school']?.dispose();
+      team['members']?.dispose();
     }
     super.dispose();
   }
@@ -41,8 +77,6 @@ class _CreateBracketScreenState extends State<CreateBracketScreen> {
     setState(() => _testingConnection = true);
     print('Testing connection to server...');
     try {
-      // Don't probe a specific bracket ID (it may not exist yet).
-      // Use tournaments list as a simple connectivity check.
       await ApiService().getTournaments();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -102,15 +136,69 @@ class _CreateBracketScreenState extends State<CreateBracketScreen> {
   }
 
   void _create() async {
-    if (!_formKey.currentState!.validate()) return;
-    _formKey.currentState!.save();
-    final teams = _teamControllers.map((c) => c.text.trim()).toList();
+    // Capture tournament name from form
+    _formKey.currentState?.save();
+    
+    if (_name.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Tournament name is required')),
+      );
+      return;
+    }
+    
+    // Build teams payload directly from controllers, ensuring zero non-JSON-safe values
+    List<Map<String, dynamic>> finalTeams = [];
+    
+    for (final team in _teamControllers) {
+      String nameVal = '';
+      String schoolVal = '';
+      List<String> membersVal = [];
 
-    // Validate team count is power of 2
-    if (teams.length & (teams.length - 1) != 0) {
+      // Extract name: must be a TextEditingController
+      final nameCtrl = team['name'];
+      if (nameCtrl is TextEditingController) {
+        nameVal = nameCtrl.text.trim();
+      }
+
+      // Extract school: must be a TextEditingController
+      final schoolCtrl = team['school'];
+      if (schoolCtrl is TextEditingController) {
+        schoolVal = schoolCtrl.text.trim();
+      }
+
+      // Extract members: must be a TextEditingController
+      final membersCtrl = team['members'];
+      if (membersCtrl is TextEditingController) {
+        final raw = membersCtrl.text.trim();
+        membersVal = raw.isEmpty ? [] : raw.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+      }
+
+      // Build final team object (guaranteed JSON-safe)
+      finalTeams.add({
+        'name': nameVal,
+        'school': schoolVal,
+        'members': membersVal,
+      });
+    }
+    
+    developer.log('Final teams payload: $finalTeams');
+    developer.log('Final teams payload: $finalTeams');
+    
+    // Validate every team has a name
+    for (var i = 0; i < finalTeams.length; i++) {
+      if ((finalTeams[i]['name'] as String).isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Team ${i + 1} is missing a name')),
+        );
+        return;
+      }
+    }
+
+    // Check team count is power of 2
+    if (finalTeams.length & (finalTeams.length - 1) != 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Team count must be power of 2 (2,4,8,16), got ${teams.length}'),
+          content: Text('Team count must be power of 2 (2,4,8,16), got ${finalTeams.length}'),
           backgroundColor: Colors.orange,
         ),
       );
@@ -119,9 +207,8 @@ class _CreateBracketScreenState extends State<CreateBracketScreen> {
 
     setState(() => _creating = true);
     try {
-      print('Creating bracket: $_name with teams: $teams, type: $_type');
-      final bracket =
-          await ApiService().createBracket(_name, teams, _type);
+      print('Creating bracket: $_name with ${finalTeams.length} teams, type: $_type');
+      final bracket = await ApiService().createBracket(_name, finalTeams, _type);
       if (mounted) {
         print('Bracket created successfully: ${bracket.id}');
         Navigator.of(context).pushReplacement(MaterialPageRoute(
@@ -310,7 +397,7 @@ class _CreateBracketScreenState extends State<CreateBracketScreen> {
                   ),
                   const SizedBox(height: 20),
 
-                  // Team Names
+                  // Team Info
                   Card(
                     child: Padding(
                       padding: const EdgeInsets.all(16.0),
@@ -318,23 +405,111 @@ class _CreateBracketScreenState extends State<CreateBracketScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Team Names',
+                            'Team Info',
                             style: Theme.of(context).textTheme.titleMedium?.copyWith(
                               fontWeight: FontWeight.bold,
                             ),
                           ),
                           const SizedBox(height: 12),
                           ...List.generate(_teamControllers.length, (idx) {
+                            final team = _teamControllers[idx];
                             return Padding(
                               padding: const EdgeInsets.only(bottom: 12.0),
-                              child: TextFormField(
-                                controller: _teamControllers[idx],
-                                decoration: InputDecoration(
-                                  labelText: 'Team ${idx + 1}',
-                                  hintText: 'Enter team name',
-                                  prefixIcon: const Icon(Icons.group),
-                                ),
-                                validator: (v) => (v == null || v.isEmpty) ? 'Team name is required' : null,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // Registered team selector
+                                  DropdownButtonFormField<dynamic>(
+                                    initialValue: _selectedTeamIds.length > idx ? _selectedTeamIds[idx] : null,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Registered team (optional)',
+                                      prefixIcon: Icon(Icons.check_box_outlined),
+                                    ),
+                                    items: [
+                                      const DropdownMenuItem(value: null, child: Text('Custom / Select team')),
+                                      ..._registeredTeams.map((t) => DropdownMenuItem(value: t['id'], child: Text(t['name'] ?? '')))
+                                    ],
+                                    onChanged: (val) {
+                                      setState(() {
+                                        if (_selectedTeamIds.length <= idx) {
+                                          _selectedTeamIds = List<dynamic>.filled(_teamCount, null);
+                                        }
+                                        _selectedTeamIds[idx] = val;
+                                        if (val != null) {
+                                          // Find the registered team by ID (nullable)
+                                          Map<String, dynamic>? selected;
+                                          try {
+                                            final found = _registeredTeams.firstWhere((r) => r['id'] == val);
+                                            selected = found;
+                                          } catch (_) {
+                                            selected = null;
+                                          }
+                                          if (selected != null) {
+                                            // Safely extract and convert values
+                                            String nameStr = '';
+                                            String schoolStr = '';
+                                            String membersStr = '';
+
+                                            final rawName = selected['name'];
+                                            final rawSchool = selected['school'];
+                                            final rawMembers = selected['members'];
+
+                                            if (rawName is String) {
+                                              nameStr = rawName;
+                                            } else if (rawName != null) nameStr = rawName.toString();
+
+                                            if (rawSchool is String) {
+                                              schoolStr = rawSchool;
+                                            } else if (rawSchool != null) schoolStr = rawSchool.toString();
+
+                                            if (rawMembers is List) {
+                                              membersStr = rawMembers.map((m) => m is String ? m : (m?.toString() ?? '')).where((m) => m.isNotEmpty).join(', ');
+                                            } else if (rawMembers != null) {
+                                              membersStr = rawMembers.toString();
+                                            }
+
+                                            team['name']?.text = nameStr;
+                                            team['school']?.text = schoolStr;
+                                            team['members']?.text = membersStr;
+                                          }
+                                        } else {
+                                          // clear to allow custom entry
+                                          team['name']?.clear();
+                                          team['school']?.clear();
+                                          team['members']?.clear();
+                                        }
+                                      });
+                                    },
+                                  ),
+                                  const SizedBox(height: 8),
+                                  TextFormField(
+                                    controller: team['name'],
+                                    decoration: InputDecoration(
+                                      labelText: 'Team Name',
+                                      prefixIcon: const Icon(Icons.group),
+                                    ),
+                                    validator: (v) => (v == null || v.isEmpty) ? 'Team name is required' : null,
+                                    enabled: _selectedTeamIds.length > idx ? _selectedTeamIds[idx] == null : true,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  TextFormField(
+                                    controller: team['school'],
+                                    decoration: InputDecoration(
+                                      labelText: 'School',
+                                      prefixIcon: const Icon(Icons.school),
+                                    ),
+                                    enabled: _selectedTeamIds.length > idx ? _selectedTeamIds[idx] == null : true,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  TextFormField(
+                                    controller: team['members'],
+                                    decoration: InputDecoration(
+                                      labelText: 'Members (comma separated)',
+                                      prefixIcon: const Icon(Icons.person),
+                                    ),
+                                    enabled: _selectedTeamIds.length > idx ? _selectedTeamIds[idx] == null : true,
+                                  ),
+                                ],
                               ),
                             );
                           }),

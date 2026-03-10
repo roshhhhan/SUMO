@@ -25,7 +25,7 @@ class MatchInfo {
 class Bracket {
   int? id;
   String? type;
-  List<String>? teams;
+  List<Map<String, dynamic>>? teams; // Changed from List<String> to handle full team objects
   List<List<MatchInfo>>? rounds;
 
   Bracket({this.id, this.type, this.teams, this.rounds});
@@ -50,10 +50,26 @@ class Bracket {
         }
       }
       
+      // Handle teams: can be List<String> (legacy) or List<Map<String,dynamic>> (new)
+      List<Map<String, dynamic>>? teams;
+      final teamsData = data['teams'];
+      if (teamsData is List) {
+        teams = (teamsData).map((t) {
+          if (t is Map<String, dynamic>) {
+            return t;
+          } else if (t is String) {
+            // Legacy format: wrap string in a simple map
+            return {'name': t, 'school': '', 'members': <String>[]};
+          } else {
+            return Map<String, dynamic>.from(t as Map);
+          }
+        }).toList();
+      }
+      
       return Bracket(
         id: json['id'],
         type: data['type'],
-        teams: data['teams'] != null ? (data['teams'] as List<dynamic>).cast<String>() : null,
+        teams: teams,
         rounds: rounds,
       );
     } catch (e) {
